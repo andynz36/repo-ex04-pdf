@@ -4,3 +4,6 @@ langchain-chroma
 langchain-openai
 langchain_classic
 langchain_core
+streamlit
+load_dotenv
+tiktoken
