@@ -31,7 +31,7 @@ st.write("---")
 
 # PDF 업로드 영역
 # type=["pdf"] 경로를 지정 할 수 있음 docs 폴더로 이동 했을경우
-uploaded_file = st.file_uploader( "PDF 파일을 업로드하세요",  type=["./docs/pdf"] )
+uploaded_file = st.file_uploader( "PDF 파일을 업로드하세요",  type=["pdf"] )
 st.write("---")
 
 

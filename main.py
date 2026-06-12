@@ -1,82 +1,138 @@
-# pip install --upgrade langchain langchain-community langchain-text-splitters langchain-openai langchain-chroma pypdf python-dotenv
 
-import os
-import streamlit as st
 from dotenv import load_dotenv
 load_dotenv()
 
-from langchain_community.document_loaders import PyPDFLoader
-from langchain_text_splitters import RecursiveCharacterTextSplitter
-from langchain_chroma import Chroma
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
+import streamlit as st
+import os
+import tempfile
 
-# langchain > langchain_classic 으로 수정 > 임포트 오류 해결
-from langchain_classic.retrievers import MultiQueryRetriever
+# PDF Loader
+from langchain_community.document_loaders import PyPDFLoader
+
+# 문서 분할기
+from langchain_text_splitters import RecursiveCharacterTextSplitter
+
+# Vector DB
+from langchain_chroma import Chroma
+
+# OpenAI Embedding / Chat 모델
+from langchain_openai import OpenAIEmbeddings
+from langchain_openai import ChatOpenAI
+
+
+# 최신 Retrieval Chain
 from langchain_classic.chains import create_retrieval_chain
 from langchain_classic.chains.combine_documents import create_stuff_documents_chain
+from langchain_classic.retrievers import MultiQueryRetriever
 from langchain_core.prompts import ChatPromptTemplate
 
-st.title("PDF 문서 질문답변 봇")
+st.title("PDF File Reader")
+st.write("---")
 
-@st.cache_resource
-def init_rag_chain():
-    loader = PyPDFLoader("unsu.pdf")
-    pages = loader.load_and_split()
+# PDF 업로드 영역
+# type=["pdf"] 경로를 지정 할 수 있음 docs 폴더로 이동 했을경우
+uploaded_file = st.file_uploader( "PDF 파일을 업로드하세요",  type=["pdf"] )
+st.write("---")
+
+
+# ==========================================================
+# PDF → Document 변환 함수
+# ==========================================================
+def pdf_to_documents(uploaded_file):
+    """
+    업로드된 PDF 파일을 LangChain Document 형태로 변환
+
+    처리 과정:
+    1. Streamlit 업로드 파일 저장
+    2. PyPDFLoader 로 PDF 읽기
+    3. 페이지 단위 Document 생성
+
+    return:
+        pages (list)
+    """
+
+    # 임시 폴더 생성
+    temp_dir = tempfile.TemporaryDirectory()
+
+
+    # 임시 PDF 파일 경로 생성
+    temp_path = os.path.join( temp_dir.name,   uploaded_file.name )
+
+    # 업로드된 파일 저장
+    with open(temp_path, "wb") as f:
+        f.write(uploaded_file.getvalue())
+
+    # PDF Loader 생성
+    loader = PyPDFLoader(temp_path)
+
+    # PDF 페이지 읽기
+    pages = loader.load()
+    return pages
+
+
+if uploaded_file is not None:
+    pages = pdf_to_documents(uploaded_file)
+    st.success(  f"PDF 로딩 완료 : {len(pages)} 페이지"   )
 
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size = 300,           # 하나의 청크가 가질 최대 글자 수
-        chunk_overlap  = 20,        # 청크 간 문맥 연결을 위해 겹칠 글자 수
-        length_function = len,      # 길이 측정 기준 (기본 문자열 길이)
-        is_separator_regex = False, # 구분 기호의 정규표현식 해석 여부
-    )
-    texts = text_splitter.split_documents(pages)
+        # 한 조각의 최대 글자 수
+        chunk_size=1000,
 
-    embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
-
-    db = Chroma.from_documents(texts, embeddings_model)
-
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
-    retriever_from_llm = MultiQueryRetriever.from_llm(
-        retriever=db.as_retriever(), 
-        llm=llm
+        # 앞뒤 중복 문자, 문맥 유지를 위해 사용
+        chunk_overlap=200
     )
 
-    system_prompt = (
-        "너는 질문-답변을 돕는 유능한 비서야. "
-        "아래 제공된 맥락(context)만을 사용하여 질문에 답해줘. "
-        "답을 모르면 모른다고 하고, 절대 답변을 지어내지 마.\n\n"
-        "{context}"
-    )
-    prompt = ChatPromptTemplate.from_messages([
-        ("system", system_prompt),
-        ("human", "{input}"),
-    ])
 
-    # 검색된 문서들을 활용하여 질문에 답변하는 체인 생성
-    question_answer_chain = create_stuff_documents_chain(llm, prompt)
+    # Document 분할
+    texts = text_splitter.split_documents(  pages   )
 
-    # RAG 체인 생성: 검색과 질문-답변 체인을 결합하여 최종 RAG 체인을 만듦
-    rag_chain = create_retrieval_chain(retriever_from_llm, question_answer_chain)
-    
-    return rag_chain
+    st.info(  f"문서 조각 개수 : {len(texts)}"   )
 
-rag_chain = init_rag_chain()
+    # -------------------------------
+    # 3. Embedding 생성
+    # -------------------------------
+    embeddings = OpenAIEmbeddings()
+    # -------------------------------
+    # 4. Vector Database 생성
+    # -------------------------------
+    db = Chroma.from_documents(  documents=texts,  embedding=embeddings   )
 
-question = st.text_input("질문을 입력하세요:")
+    # -------------------------------
+    # 5. Retriever 생성
+    # -------------------------------
+    retriever = db.as_retriever(  search_kwargs={   "k": 3   }   )
 
-if st.button("질문하기"):
-    if question:
-        with st.spinner("답변을 생성하는 중입니다..."):
-            response = rag_chain.invoke({"input": question})
-        
-        st.subheader("답변")
-        st.write(response['answer'])
-        
-        with st.expander("참조 문서 확인"):
-            st.write(f"검색된 참조 문서 개수: {len(response.get('context', []))}")
-            for i, doc in enumerate(response.get('context', [])):
-                st.markdown(f"**문서 {i+1}**")
-                st.write(doc.page_content)
-    else:
-        st.warning("질문을 입력해주세요.")
+    # ======================================================
+    # 질문 입력
+    # ======================================================
+    st.header( "PDF에게 질문하세요"    )
+    question = st.text_input( "질문 입력"   )
+
+    if st.button("질문하기"):
+        if question.strip()=="":
+            st.warning(  "질문을 입력해주세요"     )
+
+        else:
+            with st.spinner( "AI가 답변 생성중..."   ):
+
+                llm = ChatOpenAI(  model="gpt-4.1-mini",    temperature=0  )
+
+                prompt = ChatPromptTemplate.from_template(
+                    """
+                    당신은 PDF 문서 분석 전문가입니다.
+
+                    아래 Context 내용을 참고하여
+                    질문에 답변하세요.
+
+                    Context: {context}
+                    Question: {input}
+                    """
+                )
+
+                document_chain = (  create_stuff_documents_chain( llm,  prompt   )   )
+
+                qa_chain = create_retrieval_chain(  retriever,  document_chain  )
+
+                result = qa_chain.invoke(  {  "input": question  }  )
+
+                st.write(  result["answer"]    )
